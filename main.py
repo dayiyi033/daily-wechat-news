@@ -166,7 +166,7 @@ def build_message():
             for i, news in enumerate(news_list, start=1):
                 lines.append(
                     f"{i}. [{news['title']}]({news['link']})\n"
-                    f"   > 来源：{news['source']}"
+                    # f"   > 来源：{news['source']}"
                 )
 
             lines.append("")
