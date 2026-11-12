@@ -183,65 +183,49 @@ def build_message():
     return "\n".join(lines)
 
 
+
 def send_wecom(message):
-    webhook = os.getenv("WECOM_WEBHOOK")
+    api_key = os.getenv("WPUSH_APIKEY")
+    topic_code = os.getenv("WPUSH_TOPIC_CODE")
 
-    if not webhook:
-        raise RuntimeError("未配置 WECOM_WEBHOOK")
+    if not api_key:
+        raise RuntimeError("未配置 WPUSH_APIKEY")
 
-    # 每条消息控制在 3500 字节以内，留出安全余量
-    MAX_BYTES = 3500
+    if not topic_code:
+        raise RuntimeError("未配置 WPUSH_TOPIC_CODE")
 
-    def trim_line(line):
-        data = line.encode("utf-8")
-        if len(data) <= MAX_BYTES:
-            return line
-        return data[:MAX_BYTES - 3].decode("utf-8", "ignore") + "…"
+    data = {
+        "apikey": api_key,
+        "title": "每日资讯早报",
+        "content": message,
+        "channel": "wechat",
+        "topic_code": topic_code
+    }
 
-    # 按行拆分，尽量保持 Markdown 格式完整
-    chunks = []
-    current_lines = []
-    current_size = 0
+    request = urllib.request.Request(
+        "https://api.wpush.cn/api/v1/send",
+        data=urllib.parse.urlencode(data).encode("utf-8"),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        method="POST"
+    )
 
-    for line in message.splitlines():
-        line = trim_line(line)
-        line_size = len(line.encode("utf-8")) + 1
-
-        if current_lines and current_size + line_size > MAX_BYTES:
-            chunks.append("\n".join(current_lines))
-            current_lines = []
-            current_size = 0
-
-        current_lines.append(line)
-        current_size += line_size
-
-    if current_lines:
-        chunks.append("\n".join(current_lines))
-
-    # 分批发送到企业微信群
-    for index, content in enumerate(chunks):
-        if index > 0:
-            content = "## 每日资讯早报（续）\n" + content
-
-        payload = {
-            "msgtype": "markdown",
-            "markdown": {
-                "content": content
-            }
-        }
-
-        request = urllib.request.Request(
-            webhook,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"}
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")
+        raise RuntimeError(
+            f"WPush HTTP错误：{error.code}，{detail}"
         )
 
-        with urllib.request.urlopen(request, timeout=20) as response:
-            result = json.loads(response.read().decode("utf-8"))
+    if result.get("code") != 0:
+        raise RuntimeError(f"WPush发送失败：{result}")
 
-        if result.get("errcode") != 0:
-            raise RuntimeError(f"企业微信发送失败：{result}")
-
+    print(f"WPush消息提交成功，消息ID：{result.get('data')}")
 
 if __name__ == "__main__":
     message = build_message()
