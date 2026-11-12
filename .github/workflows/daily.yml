@@ -27,5 +27,6 @@ jobs:
 
       - name: Run daily news
         env:
-          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          WPUSH_APIKEY: ${{ secrets.WPUSH_APIKEY }}
+          WPUSH_TOPIC_CODE: ${{ secrets.WPUSH_TOPIC_CODE }}
         run: python main.py
