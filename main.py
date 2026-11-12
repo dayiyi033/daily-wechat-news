@@ -184,34 +184,63 @@ def build_message():
 
 
 def send_wecom(message):
-    webhook = os.environ.get("WECOM_WEBHOOK")
+    webhook = os.getenv("WECOM_WEBHOOK")
 
     if not webhook:
-        raise ValueError("缺少 WECOM_WEBHOOK 环境变量")
+        raise RuntimeError("未配置 WECOM_WEBHOOK")
 
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {
-            "content": message
+    # 每条消息控制在 3500 字节以内，留出安全余量
+    MAX_BYTES = 3500
+
+    def trim_line(line):
+        data = line.encode("utf-8")
+        if len(data) <= MAX_BYTES:
+            return line
+        return data[:MAX_BYTES - 3].decode("utf-8", "ignore") + "…"
+
+    # 按行拆分，尽量保持 Markdown 格式完整
+    chunks = []
+    current_lines = []
+    current_size = 0
+
+    for line in message.splitlines():
+        line = trim_line(line)
+        line_size = len(line.encode("utf-8")) + 1
+
+        if current_lines and current_size + line_size > MAX_BYTES:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_size = 0
+
+        current_lines.append(line)
+        current_size += line_size
+
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+
+    # 分批发送到企业微信群
+    for index, content in enumerate(chunks):
+        if index > 0:
+            content = "## 每日资讯早报（续）\n" + content
+
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {
+                "content": content
+            }
         }
-    }
 
-    body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            webhook,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
 
-    req = urllib.request.Request(
-        webhook,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
 
-    with urllib.request.urlopen(req, timeout=20) as response:
-        result = json.loads(response.read().decode("utf-8"))
-
-    if result.get("errcode") != 0:
-        raise RuntimeError(f"企业微信发送失败：{result}")
-
-    print("每日早报推送成功！")
+        if result.get("errcode") != 0:
+            raise RuntimeError(f"企业微信发送失败：{result}")
 
 
 if __name__ == "__main__":
