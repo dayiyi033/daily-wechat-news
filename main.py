@@ -4,6 +4,9 @@ import json
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
+import time
+import socket
+import ssl
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -41,20 +44,61 @@ US_INDEXES = [
 # 二、通用 HTTP 请求
 # ============================================================
 
-def http_get(url):
-    req = urllib.request.Request(
+
+def http_get(url, timeout=60, retries=4):
+    """
+    HTTP GET 请求：
+    1. 超时时间提高到 60 秒
+    2. 网络异常自动重试
+    3. 逐步增加重试间隔
+    """
+
+    request = urllib.request.Request(
         url,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
             ),
-            "Accept": "application/json, text/xml, */*",
+            "Accept": "application/json,text/html,*/*"
         }
     )
 
-    with urllib.request.urlopen(req, timeout=25) as response:
-        return response.read()
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=timeout
+            ) as response:
+                return response.read().decode("utf-8")
+
+        except urllib.error.HTTPError:
+            # HTTP 状态错误不通过重复请求掩盖
+            raise
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            socket.timeout,
+            ssl.SSLError
+        ) as e:
+
+            if attempt == retries:
+                print(
+                    f"HTTP 请求最终失败，"
+                    f"已重试 {retries} 次：{repr(e)}"
+                )
+                raise
+
+            wait_seconds = 2 ** attempt
+
+            print(
+                f"HTTP 请求失败，第 {attempt} 次尝试，"
+                f"{wait_seconds} 秒后重试：{repr(e)}"
+            )
+
+            time.sleep(wait_seconds)
 
 
 # ============================================================
