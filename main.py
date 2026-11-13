@@ -32,7 +32,7 @@ NEWS_CATEGORIES = {
 # 美股指数
 US_INDEXES = [
     ("道琼斯", "^DJI"),
-    ("纳斯达克", "^IXIC"),
+    ("纳斯达克100", "^NDX"),
     ("标普500", "^GSPC"),
 ]
 
