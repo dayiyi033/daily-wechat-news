@@ -52,8 +52,15 @@ def get_weather():
         + urllib.parse.urlencode(params)
     )
 
-    data = json.loads(http_get(url))
-    daily = data["daily"]
+    try:
+        print("开始请求 Open-Meteo 天气接口...")
+        response = http_get(url)
+        print("天气接口响应成功，开始解析数据...")
+        data = json.loads(response)
+    except Exception as e:
+        print(f"Open-Meteo 请求异常：{type(e).__name__}: {repr(e)}")
+        raise
+        daily = data["daily"]
 
     weather_map = {
         0: "晴", 1: "大部晴朗", 2: "局部多云",
