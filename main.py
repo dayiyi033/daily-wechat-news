@@ -240,12 +240,113 @@ def parse_news_date(value):
 
 
 def normalize_news_title(title):
-    """用于跨搜索词去重的标题归一化。"""
+    """清理标题格式，用于完全重复标题去重。"""
     import re
     value = (title or "").strip().lower()
-    # Google News 标题常以“ - 媒体名”结尾，去掉尾部媒体名有助于合并转载。
+    # Google News 标题常以“ - 媒体名”结尾。
     value = re.sub(r"\s+-\s+[^-]{2,40}$", "", value)
     return re.sub(r"[\s\W_]+", "", value, flags=re.UNICODE)
+
+
+# 仅用于事件相似度判断的主题泛词。APEC 等组织名不作为事件相同的依据。
+NEWS_SIMILARITY_STOPWORDS = {
+    "中国", "我国", "国内", "国际", "全球", "世界", "今日", "最新",
+    "消息", "新闻", "报道", "表示", "指出", "认为", "有关", "相关",
+    "情况", "影响", "背后", "观察", "关注", "分析", "解读", "如何",
+    "什么", "一个", "多个", "持续", "进一步", "正式", "举行", "进行",
+    "会议", "活动", "发展", "经济", "科技", "产业", "领域", "方面",
+    "APEC", "亚太经合组织", "亚太经合", "峰会",
+}
+
+# 同义动作归为一类；不同类别通常代表不同事件，不自动合并。
+NEWS_EVENT_ACTIONS = {
+    "会议召开": ("开幕", "启幕", "召开", "举行", "举办"),
+    "访问会晤": ("访问", "访华", "会见", "会晤", "会谈", "出访"),
+    "政策发布": ("出台", "发布", "公布", "通过", "实施", "调整", "宣布"),
+    "协议签署": ("签署", "签订", "达成协议", "达成共识"),
+    "军事冲突": ("袭击", "空袭", "轰炸", "进攻", "入侵", "交火", "停火"),
+    "事故灾害": ("地震", "洪水", "火灾", "爆炸", "坍塌", "事故"),
+    "企业经营": ("收购", "并购", "裁员", "破产", "上市", "融资"),
+}
+
+
+def _news_action_group(title):
+    hits = []
+    for group, verbs in NEWS_EVENT_ACTIONS.items():
+        for verb in verbs:
+            if verb in title:
+                hits.append((len(verb), group))
+    return max(hits)[1] if hits else None
+
+
+def _news_char_ngrams(title, n=2):
+    """提取中文字符 n-gram；移除宽泛主题词，避免仅因同属 APEC 而相似。"""
+    import re
+    value = normalize_news_title(title)
+    for word in sorted(NEWS_SIMILARITY_STOPWORDS, key=len, reverse=True):
+        value = value.replace(word.lower(), "")
+    value = re.sub(r"[0-9年月日时分]", "", value)
+    if len(value) < n:
+        return {value} if value else set()
+    return {value[i:i+n] for i in range(len(value) - n + 1)}
+
+
+def news_event_similarity(title_a, title_b):
+    """返回保守的标题事件相似度；不把共同主题词直接视为同一事件。"""
+    from difflib import SequenceMatcher
+
+    a = normalize_news_title(title_a)
+    b = normalize_news_title(title_b)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+
+    action_a = _news_action_group(title_a)
+    action_b = _news_action_group(title_b)
+    if action_a and action_b and action_a != action_b:
+        return 0.0
+
+    grams_a = _news_char_ngrams(title_a)
+    grams_b = _news_char_ngrams(title_b)
+    union = grams_a | grams_b
+    jaccard = len(grams_a & grams_b) / len(union) if union else 0.0
+    sequence = SequenceMatcher(None, a, b).ratio()
+    similarity = max(jaccard, sequence)
+
+    # 中等相似度还必须有足够多的共同内容片段，降低同主题误删概率。
+    shared_anchors = len(grams_a & grams_b)
+    if similarity >= 0.86:
+        return similarity
+    if similarity >= 0.70 and shared_anchors >= 3:
+        return similarity
+
+    # 标题改写幅度较大时，仅在“事件动作类别相同 + 多个内容片段重合”时合并。
+    # 例如“化工厂爆炸事故”与“化工厂爆炸造成多人伤亡”；没有共同动作类别则不走此分支。
+    if action_a and action_a == action_b and similarity >= 0.50 and shared_anchors >= 6:
+        return similarity
+    return 0.0
+
+
+def deduplicate_news_events(ranked_news):
+    """事件级保守去重。输入应已按优先级排序，保留排序靠前的代表新闻。"""
+    kept = []
+    for item in ranked_news:
+        duplicate_of = None
+        for existing in kept:
+            similarity = news_event_similarity(item["title"], existing["title"])
+            if similarity:
+                duplicate_of = existing
+                break
+
+        if duplicate_of is None:
+            kept.append(item)
+        else:
+            print(
+                "合并疑似重复新闻："
+                f"[{item['title']}] -> [{duplicate_of['title']}]"
+            )
+    return kept
 
 
 def get_news(query, max_items=30, max_age_hours=36):
@@ -371,7 +472,9 @@ def rank_news(news_list, weights):
         ),
         reverse=True,
     )
-    return ranked
+
+    # 排序后去重：同一事件优先保留关键词分数更高、发布时间更新的报道。
+    return deduplicate_news_events(ranked)
 
 
 def format_news_item(index, news, fallback=False):
