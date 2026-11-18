@@ -22,29 +22,73 @@ US_TZ = ZoneInfo("America/New_York")
 LAT = 34.3416
 LON = 108.9398
 
-# 国内新闻优先，国际新闻只保留重大事件
+# 国内新闻优先，国际新闻只保留重大事件；多主题搜索避免单一查询漏新闻。
 DOMESTIC_NEWS_LIMIT = 6
 INTERNATIONAL_NEWS_LIMIT = 3
 
-NEWS_QUERIES = {
-    "国内热点": (
-        "中国 国内 重大政策 社会热点 经济 科技 重要新闻"
-    ),
-    "国际重大新闻": (
-        "国际 重大事件 战争 冲突 地缘政治 全球经济 重大灾害"
-    ),
+DOMESTIC_NEWS_QUERIES = [
+    "中国 重要政策 政策发布 国务院 部委",
+    "中国 经济 财政 货币 房地产 就业 消费",
+    "中国 社会 民生 教育 医疗 交通 公共安全",
+    "中国 科技 产业 制造业 能源 重大进展",
+    "中国 新闻 今日",
+]
+
+INTERNATIONAL_NEWS_QUERIES = [
+    "国际 战争 冲突 停火 制裁 地缘政治",
+    "国际 全球经济 美联储 央行 贸易 关税",
+    "国际 灾害 地震 疫情 公共安全",
+    "国际 科技 芯片 人工智能 重大突破",
+    "国际 新闻 今日",
+]
+
+# 关键词按重要程度加权。分值越高，越优先；同一关键词组命中多项可累加。
+DOMESTIC_KEYWORD_WEIGHTS = {
+    "高": (8, (
+        "中央政治局", "中央经济工作会议", "全国两会", "政府工作报告",
+        "国务院常务会议", "重大政策", "重要政策", "国家战略", "法律通过",
+        "法律实施", "重大改革", "重大部署", "国家统计局", "国民经济",
+        "重大事故", "重大灾害", "重大安全事故", "公共卫生事件",
+        "全国性", "全国范围", "央行降准", "央行降息", "金融监管",
+    )),
+    "中": (5, (
+        "政策出台", "政策调整", "新规", "条例", "办法发布", "经济增长",
+        "房地产", "房价", "就业", "失业率", "消费", "出口", "进口",
+        "财政", "税收", "人民币", "股市", "能源", "粮食", "医疗",
+        "医保", "教育", "高考", "养老金", "社保", "极端天气",
+        "洪水", "台风", "地震", "火灾", "交通事故", "供应链",
+        "芯片", "人工智能", "科技突破", "产业升级",
+    )),
+    "一般": (2, (
+        "发布", "公布", "启动", "推进", "改革", "建设", "项目",
+        "企业", "市场", "消费市场", "创新", "发展",
+    )),
 }
 
-# 国际新闻必须命中至少一个重大事件关键词才会进入早报。
-# 这是规则筛选，不代表自动判断绝对准确；后续可根据实际推送效果调整。
-INTERNATIONAL_MAJOR_KEYWORDS = (
-    "战争", "开战", "军事冲突", "武装冲突", "袭击", "入侵",
-    "停火", "和平协议", "核", "制裁", "政变", "选举结果",
-    "总统", "首相", "峰会", "央行", "美联储", "降息", "加息",
-    "金融危机", "全球经济", "贸易战", "关税",
-    "地震", "海啸", "飓风", "台风", "疫情", "重大事故",
-    "人工智能", "芯片禁令", "出口管制", "重大突破",
-    "联合国", "北约", "欧盟", "中东", "俄乌", "巴以",
+INTERNATIONAL_KEYWORD_WEIGHTS = {
+    "高": (10, (
+        "战争", "全面战争", "大规模冲突", "军事入侵", "停火协议",
+        "和平协议", "政变", "核武器", "核试验", "核威胁", "重大制裁",
+        "金融危机", "全球金融", "全球经济衰退", "全球疫情", "重大地震",
+        "海啸", "重大恐袭", "恐怖袭击", "联合国安理会", "北约集体防御",
+    )),
+    "中": (6, (
+        "美联储", "欧洲央行", "日本央行", "央行降息", "央行加息",
+        "贸易战", "关税", "出口管制", "芯片禁令", "能源危机",
+        "石油供应", "天然气供应", "总统选举", "大选结果", "国际峰会",
+        "制裁", "入侵", "空袭", "导弹袭击", "军事冲突", "地缘政治",
+        "重大灾害", "飓风", "台风", "疫情", "人工智能突破",
+        "重大科技突破", "全球供应链",
+    )),
+    "低": (2, (
+        "总统", "首相", "外交", "联合国", "欧盟", "北约", "中东",
+        "俄乌", "巴以", "峰会", "国际贸易", "国际市场",
+    )),
+}
+
+# 过滤明显低价值内容；不作为唯一筛选条件，避免误删重要新闻。
+NEWS_EXCLUDE_KEYWORDS = (
+    "明星八卦", "娱乐圈恋情", "综艺花絮", "网红带货", "彩票开奖",
 )
 
 # 财经模块只保留纳斯达克100和上海黄金交易所 Au99.99
@@ -195,9 +239,18 @@ def parse_news_date(value):
         return None
 
 
-def get_news(query, limit):
+def normalize_news_title(title):
+    """用于跨搜索词去重的标题归一化。"""
+    import re
+    value = (title or "").strip().lower()
+    # Google News 标题常以“ - 媒体名”结尾，去掉尾部媒体名有助于合并转载。
+    value = re.sub(r"\s+-\s+[^-]{2,40}$", "", value)
+    return re.sub(r"[\s\W_]+", "", value, flags=re.UNICODE)
+
+
+def get_news(query, max_items=30, max_age_hours=36):
     params = {
-        "q": query + " when:1d",
+        "q": query + f" when:{max(1, int((max_age_hours + 23) // 24))}d",
         "hl": "zh-CN",
         "gl": "CN",
         "ceid": "CN:zh-Hans",
@@ -211,6 +264,7 @@ def get_news(query, limit):
     root = ET.fromstring(http_get(url))
     results = []
     seen = set()
+    now = datetime.now(TZ)
 
     for item in root.findall("./channel/item"):
         title = item.findtext("title", "").strip()
@@ -225,18 +279,20 @@ def get_news(query, limit):
             else "新闻来源"
         )
 
-        if not title or not link or title in seen:
+        if not title or not link:
             continue
 
-        # 不让 RSS 中明显过旧的新闻混入当天早报。
+        # 有发布时间时严格过滤过旧或异常的未来新闻；缺少时间的条目保留，避免误清空。
         if pub_date:
-            age_hours = (
-                datetime.now(TZ) - pub_date
-            ).total_seconds() / 3600
-            if age_hours > 36:
+            age_hours = (now - pub_date).total_seconds() / 3600
+            if age_hours > max_age_hours or age_hours < -6:
                 continue
 
-        seen.add(title)
+        key = normalize_news_title(title)
+        if not key or key in seen:
+            continue
+
+        seen.add(key)
         results.append({
             "title": title,
             "source": source,
@@ -244,60 +300,163 @@ def get_news(query, limit):
             "published": pub_date,
         })
 
-        if len(results) >= limit * 3:
+        if len(results) >= max_items:
             break
 
     return results
 
 
-def is_major_international_news(news):
-    title = news["title"]
-    return any(keyword in title for keyword in INTERNATIONAL_MAJOR_KEYWORDS)
+def collect_news(queries, max_age_hours=36):
+    """逐个主题抓取；单个查询失败不影响其他查询。"""
+    merged = []
+    seen = set()
+    failures = 0
 
-
-def append_news_section(lines, title, query, limit, major_only=False):
-    lines.extend([f"### {title}", ""])
-
-    try:
-        news_list = get_news(query, limit)
-
-        if major_only:
-            news_list = [
-                item for item in news_list
-                if is_major_international_news(item)
-            ]
-
-        news_list = news_list[:limit]
-
-        if not news_list:
-            if major_only:
-                lines.append("今日暂无符合重大事件筛选条件的国际新闻。")
-            else:
-                lines.append("暂无符合条件的资讯。")
-            lines.append("")
-            return
-
-        for index, news in enumerate(news_list, start=1):
-            published_text = ""
-            if news["published"]:
-                published_text = (
-                    f"（{news['published'].strftime('%m-%d %H:%M')}）"
-                )
-
-            lines.append(
-                f"{index}. [{news['title']}]({news['link']})"
-                f" — {news['source']}{published_text}"
+    for query in queries:
+        try:
+            batch = get_news(query, max_items=30, max_age_hours=max_age_hours)
+            for item in batch:
+                key = normalize_news_title(item["title"])
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(item)
+        except Exception as error:
+            failures += 1
+            print(
+                f"新闻子查询失败 [{query}]："
+                f"{type(error).__name__}: {error}"
             )
 
-        lines.append("")
+    return merged, failures
 
-    except Exception as error:
-        print(
-            f"{title} 获取失败："
-            f"{type(error).__name__}: {error}"
+
+def score_news(news, weights):
+    title = news["title"]
+    if any(word in title for word in NEWS_EXCLUDE_KEYWORDS):
+        return 0, "过滤"
+
+    score = 0
+    priority = "一般"
+    for level, (weight, keywords) in weights.items():
+        hits = [word for word in keywords if word in title]
+        if hits:
+            # 每个优先级最多累计 2 个关键词，避免堆叠关键词造成分数失真。
+            score += min(len(hits), 2) * weight
+            if level == "高":
+                priority = "高"
+            elif level in ("中", "低") and priority != "高":
+                priority = "中" if level == "中" else priority
+
+    if score == 0:
+        priority = "一般"
+    return score, priority
+
+
+def rank_news(news_list, weights):
+    ranked = []
+    for item in news_list:
+        score, priority = score_news(item, weights)
+        if priority == "过滤":
+            continue
+        item = dict(item)
+        item["score"] = score
+        item["priority"] = priority
+        ranked.append(item)
+
+    # 优先级分数优先，同分时优先发布时间较新的新闻。
+    ranked.sort(
+        key=lambda item: (
+            item["score"],
+            item["published"].timestamp() if item["published"] else 0,
+        ),
+        reverse=True,
+    )
+    return ranked
+
+
+def format_news_item(index, news, fallback=False):
+    published_text = ""
+    if news["published"]:
+        published_text = f"（{news['published'].strftime('%m-%d %H:%M')}）"
+
+    label = news.get("priority", "一般")
+    if fallback:
+        label = "兜底关注"
+
+    return (
+        f"{index}. **[{label}]** [{news['title']}]({news['link']})"
+        f" — {news['source']}{published_text}"
+    )
+
+
+def append_news_section(lines, title, queries, limit, international=False):
+    lines.extend([f"### {title}", ""])
+
+    # 第一轮：最近 36 小时，多主题搜索。
+    news_list, failures = collect_news(queries, max_age_hours=36)
+
+    # 如果结果太少，放宽到最近 48 小时并追加宽泛查询；不会用无日期旧缓存冒充新消息。
+    if len(news_list) < limit:
+        fallback_queries = (
+            ["国际 新闻 全球 最新"] if international else ["中国 国内 新闻 最新"]
         )
-        lines.append("本栏目暂时无法获取。")
+        extra, extra_failures = collect_news(fallback_queries, max_age_hours=48)
+        failures += extra_failures
+        known = {normalize_news_title(item["title"]) for item in news_list}
+        for item in extra:
+            key = normalize_news_title(item["title"])
+            if key and key not in known:
+                known.add(key)
+                news_list.append(item)
+
+    if not news_list:
+        if failures:
+            lines.append("新闻接口暂时无法获取（多个 RSS 查询均失败），本次没有可核实的新闻内容。")
+        else:
+            lines.append("新闻源在最近 48 小时内未返回可用条目，未编造新闻。")
         lines.append("")
+        return
+
+    weights = INTERNATIONAL_KEYWORD_WEIGHTS if international else DOMESTIC_KEYWORD_WEIGHTS
+    ranked = rank_news(news_list, weights)
+
+    if international:
+        # 国际新闻优先要求“高/中”级别；若没有命中，则从最新的可用国际新闻中补 1 条，明确标记兜底。
+        major = [item for item in ranked if item["priority"] in ("高", "中")]
+        if major:
+            selected = major[:limit]
+            fallback_ids = set()
+        else:
+            selected = ranked[:1]
+            fallback_ids = {id(selected[0])} if selected else set()
+    else:
+        # 国内新闻按分数排序；即使没有命中高权重词，也从近期结果中选取，避免正常有源却空栏。
+        selected = ranked[:limit]
+        fallback_ids = set()
+        if selected and all(item["score"] == 0 for item in selected):
+            fallback_ids = {id(item) for item in selected}
+
+    if not selected:
+        # 最后兜底：如果仅因关键词排除规则导致为空，从原始新闻中选最新一条。
+        selected = sorted(
+            news_list,
+            key=lambda item: item["published"].timestamp() if item["published"] else 0,
+            reverse=True,
+        )[:1]
+        for item in selected:
+            item["priority"] = "一般"
+            item["score"] = 0
+        fallback_ids = {id(item) for item in selected}
+
+    for index, item in enumerate(selected, start=1):
+        lines.append(format_news_item(index, item, fallback=id(item) in fallback_ids))
+
+    if international and fallback_ids:
+        lines.append("> 注：本次没有检索到达到重大事件关键词阈值的新闻，以上为近期国际动态兜底条目，不代表已判定为重大事件。")
+    elif fallback_ids:
+        lines.append("> 注：以上为关键词未命中高优先级词条时的近期新闻兜底结果。")
+
+    lines.append("")
 
 
 # ============================================================
@@ -634,10 +793,10 @@ def build_message():
 
     append_news_section(
         lines,
-        "国内重要资讯",
-        NEWS_QUERIES["国内热点"],
+        "国内热点资讯（按重要性排序）",
+        DOMESTIC_NEWS_QUERIES,
         DOMESTIC_NEWS_LIMIT,
-        major_only=False,
+        international=False,
     )
 
     lines.extend([
@@ -648,10 +807,10 @@ def build_message():
 
     append_news_section(
         lines,
-        "国际重大事件（严格筛选）",
-        NEWS_QUERIES["国际重大新闻"],
+        "国际重大事件（重大优先，必要时兜底）",
+        INTERNATIONAL_NEWS_QUERIES,
         INTERNATIONAL_NEWS_LIMIT,
-        major_only=True,
+        international=True,
     )
 
     lines.extend([
@@ -685,7 +844,7 @@ def build_message():
         "",
         "---",
         (
-            "> 数据来源：Open-Meteo、Google News RSS、"
+            "> 数据来源：Open-Meteo、Google News RSS（多主题检索）、"
             "Yahoo Finance、上海黄金交易所"
         ),
     ])
