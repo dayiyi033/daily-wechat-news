@@ -478,17 +478,20 @@ def rank_news(news_list, weights):
 
 
 def format_news_item(index, news, fallback=False):
-    published_text = ""
-    if news["published"]:
-        published_text = f"（{news['published'].strftime('%m-%d %H:%M')}）"
-
+    """新闻标题与来源、时间分行展示，保留原始链接。"""
     label = news.get("priority", "一般")
     if fallback:
         label = "兜底关注"
 
+    published_text = (
+        news["published"].strftime("%m-%d %H:%M")
+        if news.get("published") else "发布时间未知"
+    )
+
     return (
-        f"{index}. **[{label}]** [{news['title']}]({news['link']})"
-        f" — {news['source']}{published_text}"
+        f"**{index:02d}｜{label}**\n"
+        f"[{news['title']}]({news['link']})\n"
+        f"> 来源：{news['source']}　|　发布时间：{published_text}"
     )
 
 
@@ -552,6 +555,8 @@ def append_news_section(lines, title, queries, limit, international=False):
         fallback_ids = {id(item) for item in selected}
 
     for index, item in enumerate(selected, start=1):
+        if index > 1:
+            lines.append("")
         lines.append(format_news_item(index, item, fallback=id(item) in fallback_ids))
 
     if international and fallback_ids:
@@ -650,24 +655,20 @@ def get_us_market():
         try:
             item = get_us_index(symbol)
 
-            lines.append(
-                f"- **{name}：** {item['close']:,.2f} 点 "
-                f"（较前一交易日 {item['change_pct']:+.2f}%）"
-            )
-            lines.append(
-                f"  - 交易日期：{item['trade_date']}（美东时间）"
-            )
+            lines.extend([
+                f"**指数点位：{item['close']:,.2f} 点**",
+                f"**涨跌幅：{item['change_pct']:+.2f}%**（较前一交易日）",
+                f"> 交易日期：{item['trade_date']}（美东时间）",
+            ])
 
             if item["market_update"]:
                 lines.append(
-                    "  - 行情更新时间："
-                    f"{item['market_update'].strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"> 行情更新时间：{item['market_update'].strftime('%Y-%m-%d %H:%M:%S')} "
                     "（北京时间，Yahoo Finance）"
                 )
             else:
                 lines.append(
-                    "  - 数据抓取时间："
-                    f"{item['fetched_at'].strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"> 数据抓取时间：{item['fetched_at'].strftime('%Y-%m-%d %H:%M:%S')} "
                     "（北京时间；非交易所更新时间）"
                 )
 
@@ -852,11 +853,11 @@ def get_gold_close():
     status = "数据可能滞后，请勿视为当日最新行情" if is_stale else "最近有效交易日行情"
 
     return (
-        f"- **Au99.99：** {latest['close']:.2f} 元/克\n"
-        f"- **涨跌：** {change_text}\n"
-        f"- **行情日期：** {latest['date'].isoformat()}（上金所交易日期）\n"
-        f"- **抓取时间：** {fetched_at.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）\n"
-        f"- **数据状态：** {status}"
+        f"**Au99.99：{latest['close']:.2f} 元/克**\n"
+        f"**涨跌：** {change_text}\n"
+        f"> 交易日期：{latest['date'].isoformat()}（上海黄金交易所）\n"
+        f"> 抓取时间：{fetched_at.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）\n"
+        f"> 数据状态：{status}"
     )
 
 
@@ -872,10 +873,11 @@ def build_message():
         (
             f"> {now.strftime('%Y年%m月%d日')} 星期"
             f"{'一二三四五六日'[now.weekday()]}"
+            f"　|　生成时间：{now.strftime('%H:%M:%S')}（北京时间）"
         ),
-        f"> 生成时间：{now.strftime('%H:%M:%S')}（北京时间）",
         "",
-        "## 一、今日天气 | 西安",
+        "---",
+        "## 01｜今日天气 · 西安",
         "",
     ]
 
@@ -886,17 +888,20 @@ def build_message():
             f"天气获取失败："
             f"{type(error).__name__}: {error}"
         )
-        lines.append("天气数据暂时无法获取。")
+        lines.append("**天气数据暂时无法获取。**")
 
     lines.extend([
         "",
-        "## 二、国内热点新闻",
+        "---",
+        "## 02｜国内热点新闻",
+        "",
+        "> 按重要程度排序 · 最多 6 条",
         "",
     ])
 
     append_news_section(
         lines,
-        "国内热点资讯（按重要性排序）",
+        "国内热点 · 重要资讯",
         DOMESTIC_NEWS_QUERIES,
         DOMESTIC_NEWS_LIMIT,
         international=False,
@@ -904,13 +909,16 @@ def build_message():
 
     lines.extend([
         "",
-        "## 三、国际重大新闻",
+        "---",
+        "## 03｜国际重大新闻",
+        "",
+        "> 严格筛选重大事件 · 最多 3 条",
         "",
     ])
 
     append_news_section(
         lines,
-        "国际重大事件（重大优先，必要时兜底）",
+        "国际热点 · 重大事件",
         INTERNATIONAL_NEWS_QUERIES,
         INTERNATIONAL_NEWS_LIMIT,
         international=True,
@@ -918,9 +926,10 @@ def build_message():
 
     lines.extend([
         "",
-        "## 四、财经行情",
+        "---",
+        "## 04｜财经行情",
         "",
-        "### （一）纳斯达克100",
+        "### 纳斯达克100",
         "",
     ])
 
@@ -928,7 +937,7 @@ def build_message():
 
     lines.extend([
         "",
-        "### （二）黄金 Au99.99",
+        "### 黄金 · Au99.99",
         "",
     ])
 
@@ -940,16 +949,16 @@ def build_message():
             f"{type(error).__name__}: {error}"
         )
         lines.append(
-            "- **Au99.99：** 暂时无法获取有效行情，未使用旧数据冒充最新价格。"
+            "**Au99.99：暂时无法获取有效行情。**\n"
+            "> 未使用旧数据冒充最新价格。"
         )
 
     lines.extend([
         "",
         "---",
-        (
-            "> 数据来源：Open-Meteo、Google News RSS（多主题检索）、"
-            "Yahoo Finance、上海黄金交易所"
-        ),
+        "**数据来源**",
+        "> 天气：Open-Meteo　|　新闻：Google News RSS（多主题检索）",
+        "> 美股：Yahoo Finance　|　黄金：上海黄金交易所",
     ])
 
     return "\n".join(lines)
